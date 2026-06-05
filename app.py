@@ -1,162 +1,51 @@
-import eventlet
-eventlet.monkey_patch()
-from flask import Flask, render_template
-from flask_socketio import SocketIO
-import socket
-from datetime import datetime
+ 
+"""
+CyberShield - Secure Python Application
+Demonstrates secure coding practices for DevSecOps pipeline.
+"""
 
-eventlet.monkey_patch()
+from flask import Flask, jsonify, request
+import hashlib
+import os
 
 app = Flask(__name__)
-socketio = SocketIO(
-    app,
-    cors_allowed_origins="*",
-    async_mode="eventlet"
-)
 
-# =========================
-# STATE
-# =========================
-state = {
-    "blocked_ips": {'127.0.0.2', '192.168.1.100'},
-    "stats": {
-        "total": 0,
-        "accepted": 0,
-        "blocked": 0
-    }
-}
+SECRET_KEY = os.environ.get("SECRET_KEY", "change-me-in-production")
 
-# =========================
-# CONNECT
-# =========================
-@socketio.on('connect')
-def handle_connect():
-    print("[+] Dashboard Connected")
-    socketio.emit('update_blacklist', list(state["blocked_ips"]))
-    socketio.emit('update_stats', state["stats"])
 
-# =========================
-# BLOCK IP
-# =========================
-@socketio.on('block_ip_request')
-def handle_block(data):
-    ip = data.get('ip')
-    if ip:
-        state["blocked_ips"].add(ip)
-        socketio.emit('update_blacklist', list(state["blocked_ips"]))
-        socketio.emit('new_log', {
-            'type': 'SYSTEM',
-            'ip': 'FIREWALL',
-            'msg': f'IP {ip} added to blacklist manually',
-            'time': datetime.now().strftime("%H:%M:%S")
-        })
+def hash_data(data: str) -> str:
+    """Hash input data using SHA-256 (secure)."""
+    return hashlib.sha256(data.encode()).hexdigest()
 
-# =========================
-# UNBLOCK IP
-# =========================
-@socketio.on('unblock_ip_request')
-def handle_unblock(data):
-    ip = data.get('ip')
-    if ip and ip in state["blocked_ips"]:
-        state["blocked_ips"].discard(ip)
-        socketio.emit('update_blacklist', list(state["blocked_ips"]))
-        socketio.emit('new_log', {
-            'type': 'SYSTEM',
-            'ip': 'FIREWALL',
-            'msg': f'IP {ip} removed from blacklist',
-            'time': datetime.now().strftime("%H:%M:%S")
-        })
 
-# =========================
-# SMTP SERVER LOGIC
-# =========================
-def smtp_server_logic():
-    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(('0.0.0.0', 9999))
-    server.listen(5)
+def validate_input(data: str) -> bool:
+    """Validate input to prevent injection attacks."""
+    if not data or len(data) > 256:
+        return False
+    allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _-")
+    return all(c in allowed_chars for c in data)
 
-    print("[+] SMTP Server Running On Port 9999")
 
-    while True:
-        client, addr = server.accept()
-        ip = addr[0]
-        state["stats"]["total"] += 1
-        socketio.emit('update_stats', state["stats"])
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({"status": "healthy", "service": "CyberShield API", "version": "1.0.0"})
 
-        if ip in state["blocked_ips"]:
-            state["stats"]["blocked"] += 1
-            socketio.emit('update_stats', state["stats"])
-            socketio.emit('new_log', {
-                'type': 'BLOCKED',
-                'ip': ip,
-                'msg': f'Connection blocked from {ip}',
-                'time': datetime.now().strftime("%H:%M:%S")
-            })
-            client.send(b"554 Blocked by CyberShield Firewall\n")
-            client.close()
-            continue
 
-        state["stats"]["accepted"] += 1
-        socketio.emit('update_stats', state["stats"])
-        socketio.emit('new_log', {
-            'type': 'SUCCESS',
-            'ip': ip,
-            'msg': f'Connection established with {ip}',
-            'time': datetime.now().strftime("%H:%M:%S")
-        })
+@app.route("/hash", methods=["POST"])
+def hash_endpoint():
+    body = request.get_json()
+    if not body or "data" not in body:
+        return jsonify({"error": "Missing 'data' field"}), 400
+    data = str(body["data"])
+    if not validate_input(data):
+        return jsonify({"error": "Invalid input"}), 422
+    return jsonify({"input": data, "sha256": hash_data(data)})
 
-        try:
-            client.send(b"220 CyberShield SMTP Ready\n")
 
-            while True:
-                data = client.recv(1024).decode(errors="ignore").strip()
+@app.route("/ping", methods=["GET"])
+def ping():
+    return jsonify({"message": "pong"})
 
-                if not data or data.upper() == "QUIT":
-                    break
 
-                socketio.emit('new_log', {
-                    'type': 'DATA',
-                    'ip': ip,
-                    'msg': f"CMD: {data.replace('<', '&lt;').replace('>', '&gt;')}",  # ← التعديل هنا
-                    'time': datetime.now().strftime("%H:%M:%S")
-                })
-
-                client.send(b"250 OK\n")
-
-        except Exception as e:
-            print(f"Error handling {ip}: {e}")
-            socketio.emit('new_log', {
-                'type': 'SYSTEM',
-                'ip': 'SERVER',
-                'msg': f'Error: {str(e)}',
-                'time': datetime.now().strftime("%H:%M:%S")
-            })
-        finally:
-            client.close()
-            socketio.emit('new_log', {
-                'type': 'CLOSED',
-                'ip': ip,
-                'msg': f'Session closed for {ip}',
-                'time': datetime.now().strftime("%H:%M:%S")
-            })
-
-# =========================
-# ROUTES
-# =========================
-@app.route('/')
-def index():
-    return render_template('cyber-smtp.html')
-
-# =========================
-# START
-# =========================
-if __name__ == '__main__':
-    socketio.start_background_task(smtp_server_logic)
-    print("[+] Running Dashboard on http://127.0.0.1:5000")
-    socketio.run(
-        app,
-        host='127.0.0.1',
-        port=5000,
-        debug=False
-    )
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=False) #nosec B104
