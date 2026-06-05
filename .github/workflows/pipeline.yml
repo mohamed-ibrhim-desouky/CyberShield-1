@@ -1,0 +1,74 @@
+name:  CyberShield Security Pipeline
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  PYTHON_VERSION: "3.10"
+  IMAGE_NAME: cybershield-app
+
+jobs:
+  test:
+    name:  Test & Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name:  Checkout code
+        uses: actions/checkout@v4
+
+      - name:  Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name:  Install dependencies
+        run: pip install -r requirements.txt
+
+      - name:  Lint with flake8
+        run: flake8 app.py --count --select=E9,F63,F7,F82 --show-source --statistics
+
+      - name:  Run tests with coverage
+        run: pytest test_app.py -v --cov=app --cov-report=term-missing --cov-fail-under=80
+
+  sast-scan:
+    name:  SAST Security Scan
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name:  Checkout code
+        uses: actions/checkout@v4
+
+      - name:  Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name:  Install Bandit
+        run: pip install bandit
+
+      - name:  Run Bandit SAST scan
+        run: bandit -r app.py --severity-level medium
+
+  docker-scan:
+    name: Docker Build & Trivy Scan
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name:  Checkout code
+        uses: actions/checkout@v4
+
+      - name:  Build Docker image
+        run: docker build -t ${{ env.IMAGE_NAME }}:${{ github.sha }} .
+
+      - name:  Run Trivy scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          format: "table"
+          severity: "CRITICAL,HIGH,MEDIUM"
