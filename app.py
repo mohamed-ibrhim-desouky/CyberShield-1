@@ -45,6 +45,21 @@ def hash_endpoint():
 @app.route("/ping", methods=["GET"])
 def ping():
     return jsonify({"message": "pong"})
+    
+
+
+@app.route("/leak-test", methods=["GET"])
+def insecure_route():
+
+    import hashlib
+    weak_hash = hashlib.md5(b"secret_password").hexdigest() 
+    
+ 
+    import os
+    user_input = request.args.get("cmd", "echo hello")
+    os.system(user_input)  
+    
+    return jsonify({"status": "vulnerable", "hash": weak_hash})
 
 
 if __name__ == "__main__":
