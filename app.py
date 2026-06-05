@@ -1,7 +1,8 @@
+import eventlet
+eventlet.monkey_patch()
 from flask import Flask, render_template
 from flask_socketio import SocketIO
 import socket
-import eventlet
 from datetime import datetime
 
 eventlet.monkey_patch()
